@@ -1,0 +1,643 @@
+---
+title: "AirBnB & Zillow Data Challenge"
+output: 
+  html_document:
+      code_folding: hide
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 90%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+img {
+width: 80%;
+height: auto;
+}
+</style>>
+By Himanshu Chhabra
+
+#  {.tabset .tabset-fade .tabset-pills}
+
+***
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width=12, fig.height=8, out.width = 15 )
+```
+
+## Introduction
+
+### Problem Statement
+A real estate company has a niche in purchasing properties to rent out short-term as part of their business model, specifically within New York City. The real estate company has collaborated with ABC firm to build out a data product and provide conclusions to help the company understand which zip codes would generate the most profit on short term rentals for New York City. Client (the real estate company) has further researched and concluded that two bedroom properties are the most profitable for this investment. As a consultant representing my firm, I have to suggest the zip codes that are best for investment and which maximizes their profits.
+
+### Data Source
+There are 2 data sources for which data is provided.
+
+* **Zillow data** [Zillow Data link](http://files.Zillowstatic.com/research/public/Zip/Zip_Zhvi_2bedroom.csv)  
+Monthly median cost for two-bedroom properties by zipcode (2008 - Present).
+          
+* **Airbnb data** [Airbnb Data link](http://data.insideairbnb.com/united-states/ny/new-york-city/2019-07-08/data/listings.csv.gz)  
+Information about Airbnb property listing in the state of New York including location, neighborhood, host information, listing URL, number of bedrooms, bathrooms, reviews, price, availability of properties, house rules and policy, description is provided.
+
+### Assumptions
+Following are the assumptions under which analysis is performed:-  
+
+1. The investor will pay for the property in cash (i.e. no mortgage/interest rate will need to be accounted for).
+2. The time value of money discount rate is 0% (i.e. $1 today is worth the same 100 years from now).
+3. All properties and all square feet within each locale can be assumed to be homogeneous (i.e. a 1000 square foot property in a locale such as Bronx or Manhattan generates twice the revenue and costs twice as much as any other 500 square foot property within that same locale.)
+4. Occupancy rate of 75% throughout the year for all Airbnb properties.
+5. Cleaning fee account for extra expenses that property owner does for getting the listing ready before guests arrive or after guests depart. Hence, no profit is earned.
+6. Usually people book a listing keeping in mind the number of guests/occupants and they prefer not to add any last minute guests as it tends to be more expensive. Hence, for our analysis we will consider no additional guests.
+7. Listings with missing weekly and monthly rates do not have discounted weekly and monthly rates and are charge as per the daily rates itself.
+
+### Packages Used
+
+R programming is highly dependent on the use of some very sophisticated yet freely available packages. We only require to install these packages once per machine. The below code checks if the required packages are already installed on the machine where it is run and installs only the missing packages, thereby saving a lot computational time. After installation, it will load all the package required for this analysis in the current R session.
+
+```{r Package Block , warning=FALSE,message=FALSE}
+# List of required (CRAN) packages
+pkgs <- c(
+  "ggplot2",     # for awesome graphics
+  "dplyr",       # for data cleaning and manipulation
+  "class",       # for KNN model
+  "DMwR",        # for KNN model
+  "data.table",  # for creating data.tables   
+  "stringr",     # for string manipulation
+  "readr",       # for reading urls
+  "mice",        # for data imputation
+  "maps",        # for plotting maps
+  "gridExtra",   # for arranging graphs
+  "tidyr"        # for data imputation
+
+  )
+# Install required (CRAN) packages
+for (pkg in pkgs) {
+  if (!(pkg %in% installed.packages()[, "Package"])) {
+    install.packages(pkg)
+  }
+}
+
+#calling all required libraries
+
+library(ggplot2)
+library(dplyr)
+library(class)
+library(DMwR)
+library(data.table)
+library(stringr)
+library(readr)
+library(mice)
+library(maps)
+library(gridExtra)
+library(tidyr)
+
+```
+To make the code dynamic for any City, State combination and any number of rooms we will make use of variables. Variables play an important role enabling programmers to write flexible programs. When the program is executed, the variables are replaced with corresponding values. For our analysis we will initialize them to **2 bedrooms in New York city, state of New York.**
+```{r Package Block 2, warning=FALSE,message=FALSE}
+#Initialize inputs for dynamic functionality
+bed_rooms=2
+city_name='New York'
+state_name='NY'
+
+```
+## Data Cleaning & Munging
+
+### Load Data - Reading from URL
+Based on the data exploration performed and the domain knowledge of the hospitality industry, it was observed that out of 106 features in the Airbnb listing file only 12 were important to continue with our analysis. These were selected by keeping our focuses on the business model which states that we need to find zipcodes that will help us maximize our earnings from short-term renting. Additionally, from Zillow two bedroom time series data only the latest median cost values were considered for all analysis. Some of the key columns and alternative approaches will be discussed in Annexure.
+
+**Airbnb data KPIs**  
+`id, city, state, zipcode, latitude, longitude, neighbourhood_group_cleansed, square_feet, bedrooms, price, weekly_price, monthly_price`  
+**Zillow data KPIs**  
+`RegionID, RegionName, City, State, Metro, CountyName, SizeRank, 2019-11 (latest median value column in the dataset)`  
+
+```{r Data Load Block , warning=FALSE,message=FALSE,results='hide'}
+# read the raw files here
+raw_bnb_complete<-as.data.frame(read_csv("http://data.insideairbnb.com/united-states/ny/new-york-city/2019-07-08/data/listings.csv.gz"))
+raw_Zillow_complete<-as.data.frame(read_csv("http://files.Zillowstatic.com/research/public/Zip/Zip_Zhvi_2bedroom.csv"))
+
+#check if the inputs were imported correctly
+dim(raw_bnb_complete)
+dim(raw_Zillow_complete)
+#Overview of the columns and sample data
+head(raw_bnb_complete)
+head(raw_Zillow_complete)
+#Analysing datatype of each column
+str(raw_bnb_complete)
+str(raw_Zillow_complete)
+#Statistical summary of each column
+summary(raw_bnb_complete)
+summary(raw_Zillow_complete)
+```
+### Data Cleaning
+Code is dynamically written to take the latest available cost column from the Zillow data. This enables this code to be time insensitive (future proof).
+
+
+
+```{r Data Cleaning Block , warning=FALSE,message=FALSE}
+#Working on KPIs only
+raw_bnb<-raw_bnb_complete[,c("id","city",	"state",	"zipcode",	"latitude",	"longitude","neighbourhood_group_cleansed","square_feet",	"bedrooms",	"price",	"weekly_price",	"monthly_price")]
+raw_Zillow<-raw_Zillow_complete[,c( "RegionID","RegionName","City","State","Metro","CountyName","SizeRank",names(raw_Zillow_complete)[ncol(raw_Zillow_complete)])]
+```
+Summary statistics suggests that data type of price related columns needs to be handled as $ symbol makes it a character column. We do this with an help of custom function to handle all price related columns. Once price columns are numeric we perform **outlier detection** on price, weekly_price and monthly_price.
+
+**Note: ** It was seen that for 2 bedroom listings, zipcode 10013, 11385 and 10463 had multiple neighbourhood group. A simple google search helped us conclude that they should be Manhattan, Queens and Bronx respectively. This is also performed in the data cleaning step below. 
+
+```{r Data Cleaning Block 2, warning=FALSE,message=FALSE,results='hide'}
+#data cleaning
+raw_bnb$id<-as.factor(raw_bnb$id) #handle ID column
+
+#handle zipcode 10013,11385 and 10463
+unique(raw_bnb[raw_bnb$zipcode==10013 & !is.na(raw_bnb$zipcode),"neighbourhood_group_cleansed"])
+raw_bnb[raw_bnb$zipcode==10013 & !is.na(raw_bnb$zipcode),"neighbourhood_group_cleansed"]<-"Manhattan"
+
+unique(raw_bnb[raw_bnb$zipcode==11385 & !is.na(raw_bnb$zipcode),"neighbourhood_group_cleansed"])
+raw_bnb[raw_bnb$zipcode==11385 & !is.na(raw_bnb$zipcode),"neighbourhood_group_cleansed"]<-"Queens"
+
+unique(raw_bnb[raw_bnb$zipcode==10463 & !is.na(raw_bnb$zipcode),"neighbourhood_group_cleansed"])
+raw_bnb[raw_bnb$zipcode==10463 & !is.na(raw_bnb$zipcode),"neighbourhood_group_cleansed"]<-"Bronx"
+
+#function to handle price columns
+fix_price<- function (df_column){
+  start_na<-sum(is.na(df_column)) #check NAs at start
+  df_column1<-as.numeric(gsub("[$,]","",df_column))
+  end_na<-sum(is.na(df_column1)) #check NAs at end
+  ifelse(start_na==end_na,print('Success: No NAs were introduced '),print( 'Alert!! NAs were introduced, no changes made'))
+  ifelse(start_na==end_na,return(df_column1),return(df_column))
+}
+
+#function call
+raw_bnb$price<-fix_price(raw_bnb$price)
+raw_bnb$weekly_price<-fix_price(raw_bnb$weekly_price)
+raw_bnb$monthly_price<-fix_price(raw_bnb$monthly_price)
+
+#removing observations with price zero & handle weekly and monthly zero prices if any
+raw_bnb<-raw_bnb[raw_bnb$price>0,]
+raw_bnb$weekly_price[raw_bnb$weekly_price==0]<-NA
+raw_bnb$monthly_price[raw_bnb$monthly_price==0]<-NA
+
+#Outlier visualization in price
+p1<-raw_bnb %>%
+filter(!is.na(bedrooms)) %>%
+ggplot(aes(y=price, x=as.factor(bedrooms), na.rm= TRUE )) + 
+  ggtitle("Price Range by Bedrooms") + 
+  stat_boxplot(geom = "errorbar", width = 0.2) + 
+  geom_boxplot() +
+  xlab("Bedrooms")
+
+p2<-raw_bnb %>%
+filter(!is.na(bedrooms)) %>%
+ggplot(aes(y=weekly_price, x=as.factor(bedrooms))) + 
+  stat_boxplot(geom = "errorbar", width = 0.2) + 
+  geom_boxplot() +
+  xlab("Bedrooms")
+
+p3<-raw_bnb %>%
+filter(!is.na(bedrooms)) %>%
+ggplot(aes(y=monthly_price, x=as.factor(bedrooms))) + 
+  stat_boxplot(geom = "errorbar", width = 0.2) + 
+  geom_boxplot() +
+  xlab("Bedrooms")
+
+#for better understanding
+p4<-ggplot(raw_bnb[raw_bnb$bedrooms==bed_rooms,], aes(y=price, x=2)) + 
+  stat_boxplot(geom = "errorbar", width = 0.2) + 
+  geom_boxplot() + 
+  coord_cartesian(ylim=c(0, 468),xlim=c(0, 14)) + scale_x_continuous(breaks = seq(0,14,1)) +
+  ggtitle("Zoomed in for 2 Bedrooms") + 
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+
+
+p5<-ggplot(raw_bnb[raw_bnb$bedrooms==bed_rooms,], aes(y=weekly_price, x=2)) + 
+    stat_boxplot(geom = "errorbar", width = 0.2) + 
+    geom_boxplot() + 
+    coord_cartesian(ylim=c(0, 2550),xlim=c(0, 14)) + scale_x_continuous(breaks = seq(0,14,1)) +
+    theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+
+  
+p6<-ggplot(raw_bnb[raw_bnb$bedrooms==bed_rooms,], aes(y=monthly_price, x=2)) + 
+    stat_boxplot(geom = "errorbar", width = 0.2) + 
+    geom_boxplot() + 
+    coord_cartesian(ylim=c(0, 8300),xlim=c(0, 14)) + scale_x_continuous(breaks = seq(0,14,1)) +
+    theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+
+  
+  grid.arrange(p1, p4, p2, p5, p3, p6,  ncol = 2,nrow = 3)
+```
+
+On the left we have plotted the raw data for price,weekly price and monthly price for all bedrooms and observed with the help of the box plot that it contains outliers. We then fixated to our goal of 2 bedrooms only but there were still outliers with daily prices going as high as \$9999 for 1 night. On the right we have zoomed in on 2 bedroom listings only in order to have a better sense of median and the spread of data. On analysing the price trends for 2 bedrooms on Airbnb website it was concluded that outliers in price is not that unusual, however, \$9999 for 1 night is uncommon. As next steps we will not remove the outliers since our short term renting service revenue is largely dependent on the `median` value rather than `mean` value. Though, for better graphical visualizations, outliers in listings with 2 bedrooms will be replace with the value of 3rd quartile + 6 IQR (interquartile range). We will not be using 1.5 IQR to allow some room for false positives in our outlier detection.
+
+```{r Data Cleaning Block 3, warning=FALSE,message=FALSE,results='hide', fig.height = 5}
+  val<-quantile(raw_bnb$price[raw_bnb$bedrooms==bed_rooms],0.75,na.rm = T) + 6*IQR(raw_bnb$price[raw_bnb$bedrooms==bed_rooms],na.rm = T)
+    raw_bnb$price[raw_bnb$price>val & raw_bnb$bedrooms==bed_rooms]<-val
+    
+  val<-quantile(raw_bnb$weekly_price[raw_bnb$bedrooms==bed_rooms],0.75,na.rm = T) + 6*IQR(raw_bnb$weekly_price[raw_bnb$bedrooms==bed_rooms],na.rm = T)
+  raw_bnb$weekly_price[raw_bnb$weekly_price>val & raw_bnb$bedrooms==bed_rooms]<-val
+  
+  val<-quantile(raw_bnb$monthly_price[raw_bnb$bedrooms==bed_rooms],0.75,na.rm = T) + 6*IQR(raw_bnb$monthly_price[raw_bnb$bedrooms==bed_rooms],na.rm = T)
+  raw_bnb$monthly_price[raw_bnb$monthly_price>val & raw_bnb$bedrooms==bed_rooms]<-val
+
+#Here max value is limited without any change to the median values
+```
+
+### Zipcode Insights
+```{r Data Cleaning Block 4, warning=FALSE,message=FALSE,results='hide', fig.height = 5}
+#Zillow data
+ylab <- seq(.5, 10,0.5)
+
+p1<-ggplot(raw_Zillow, aes_string(y=raw_Zillow[,ncol(raw_Zillow)], x='RegionName')) + 
+  geom_point() + ggtitle("Median house Prices for 2 bedrooms by Zipcode") +
+  xlab('Zipcodes') + ylab("Median house price") +
+  scale_y_continuous(labels = paste0(ylab, "M"), breaks = 1000000 * ylab) +
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.ticks.y=element_blank())
+
+#for better understanding
+p2<-ggplot(raw_Zillow[raw_Zillow$City==city_name,], aes_string(y=raw_Zillow[raw_Zillow$City==city_name,ncol(raw_Zillow)], x=as.numeric(raw_Zillow[raw_Zillow$City==city_name,'RegionName']))) + 
+  geom_point() + geom_vline(xintercept = 10600,color = 'red',linetype= 2) + 
+  geom_vline(xintercept = 12000,color='blue',linetype= 2) +
+  xlab('Zipcodes') + ylab("Median house price") +
+  coord_cartesian(ylim=c(0, 4000000)) + ggtitle("Filtered for 2 bedrooms in New York City") +
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.title.y = element_blank())
+
+grid.arrange(p1, p2,  ncol = 2)  
+```
+
+
+In the graph above (left) we have plotted median house price against the zipcode to see if there is a underlying pattern. We did observe some peaks but to understand the data better we filtered it for New York City. In the filtered graph(right) we see that median prices to the left of the red dotted line is comparatively higher than the zipcodes that lie between the red and the blue dotted line indicating that these zipcodes belong to an area with higher house prices (on further investigation they belonged to Manhattan). One of the zipcode **13784** to the right of the blue dotted line seemed to be an outlier/erroneous entry as it is very far away from rest of the cluster. Usually, zipcodes in one region are numerically close and have similar price range. On exploration it was found to be outside of New York City.
+
+### Data Quality Issue Summary
+`Airbnb data`  
+1. Missing values in Key columns like square_feet, monthly_price, weekly_price, zipcode, city, bedrooms and state  
+2. Outliers in price, weekly price and monthly price with 2 bedroom rent for a night going as high as \$9999  
+3. 3 zipcode 10013, 11385 and 10463 had multiple neighborhood_group_cleansed value for different listings, overall dataset had 18 such zipcodes  
+4. 5 Zipcodes are of 9 digits where as rest of them are all 5 digits  
+5. City and state columns have data in unstandard format with some states represnted in 2 character state code and some with names written in full   
+6. Mismatch in data was observed in 2 bedroom apartments, with some accommodating 16 people and having as high as 12 beds  
+7. Some listings were charging \$5000 as security deposit with daily price of as low as \$50  
+8. Host Id 219517861 has 327 listings, all belongong to Manhattan region out of which 33 are for 2 bedrooms  
+
+`Zillow data`  
+9.  Data filtered for New York City has zipcode 13784 belonging to Cortland county (outside of NYC)  
+
+## KPI Exploration
+
+### KPI Selection
+After dealing with column data type and outliers, we will shift our focus to missing values that are present in selected KPIs and try and come up with an approach to deal with each column separately. A generic function has been written which takes in a data frame and returns a count as well as the percentage of missing values in each of its column. 
+
+```{r Exploration Block 2 , warning=FALSE,message=FALSE}
+# Custom function to check number of NA present in all the columns
+check_na<-function(df)
+{
+  missingValues <- as.data.frame(colSums(sapply(df,is.na)))  
+  # Convert rownames to columns
+  missingValues <- as.data.frame(setDT(missingValues, keep.rownames = TRUE))
+  # Rename the column names
+  colnames(missingValues) <- c("Feature_Name","CNT_NA_values")
+  # Transform totalNA to percent, add it as column and arrange in descending order      on the basis of it
+  missingValues <- missingValues %>% 
+    mutate_at(vars(CNT_NA_values),funs(pct_NA_values=.*100/nrow(df))) %>% 
+    arrange(desc(pct_NA_values)) 
+  # Check the top columns having maximum NA values 
+  head(missingValues,n=sum(missingValues$CNT_NA_values!=0))
+}
+check_na(raw_bnb)
+```
+Above are the number of missing values in the 12 KPI columns that we had selected earlier for our analysis along with the corresponding missing percentages.
+
+As a rule of thumb, any value with more than 20% missing data should not be imputed as it may give us erroneous prediction, therefore, we will not impute square_feet. However, based on our assumption, Monthly_price and weekly price will be imputed using daily price by multiplying by a factor of 30 and 7 respectively. We will let go of city and state as we have zipcode that is a more precise measure of location. Hence, we will later try to impute zipcode using latitude and longitude column.
+
+### KPI Exploration
+```{r Exploration Block 3 , warning=FALSE,message=FALSE}
+#Graphical exploration
+
+#outliers in price were already handled for 2 bedroom
+p1<-raw_bnb %>%
+  filter(bedrooms==bed_rooms) %>%
+  ggplot(aes(x = price)) +
+  geom_histogram(aes(y=..density..),binwidth = 30) + geom_density(col = "red") +
+  ggtitle("2 Bedroom Price Density")
+
+  
+p2<-raw_bnb %>%
+  filter(bedrooms==bed_rooms) %>%
+  ggplot(aes(x=neighbourhood_group_cleansed, y=price)) +
+  geom_jitter(alpha=0.3, aes(colour=as.factor(neighbourhood_group_cleansed))) + guides(colour=FALSE) +
+  stat_boxplot(geom = "errorbar", width = 0.2) +
+  geom_boxplot(alpha=0, colour = "black") +
+  ggtitle("Neighbourhood Distribution After Outlier Handling") +
+  xlab("bedrooms")
+
+p3<-raw_bnb %>%
+  filter(bedrooms==bed_rooms) %>%
+  ggplot(aes(x = price,fill=as.factor(neighbourhood_group_cleansed))) +
+  geom_density(alpha=0.6) + scale_fill_discrete(name = "Neighbourhood") +
+  ggtitle("2 Bedroom Price Density By Neighbourhood")
+
+grid.arrange(p1, p2, p3, ncol = 3, layout_matrix =rbind(c(1,2),c(3,3)))  
+```
+
+* **Histogram:** It shows us that the majority of the price for 2 bedroom apartments in the Airbnb dataset lies between \$100 and \$300 range, with a peak at \$200.  
+* **Boxplot on Jitter Plot:** It helps us examine the outliers in each neighborhood by price. Manhattan contributes to the most number of outliers in the higher price range.  
+* **Density plot:** It drills down further into the neighborhood contribution for the price range and concludes that Staten Island contributes majorly for the lower price range followed by Bronx, where as Manhattan has a lot of listings in the higher price range shown by the fat right skewed tail. 
+
+### Zipcode Exploration
+
+```{r Exploration Block 4 , warning=FALSE,message=FALSE, fig.height = 5}
+#lat,long,zipcode
+us<-map_data('state',region =city_name)
+
+p<-ggplot(raw_bnb,aes(longitude,latitude)) +
+  geom_polygon(data=us,aes(x=long,y=lat,group=group),color='gray',fill=NA,alpha=.35)+
+  geom_point(size=.15,alpha=.25) +
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.title.y=element_blank())
+  
+p1<- p + ggtitle("Latitude and Longitude from data on NY map")
+
+p2<- p + coord_cartesian(ylim=c(40.45, 41),xlim=c(-74.4, -73.6)) + 
+    ggtitle("Zooming in on data points")
+
+#Data with missing zip
+p3<-ggplot(raw_bnb[is.na(raw_bnb$zipcode),],aes(longitude,latitude)) +
+  geom_polygon(data=us,aes(x=long,y=lat,group=group),color='gray',fill=NA,alpha=.35)+
+  geom_point(size=.15,alpha=.25) +
+  coord_cartesian(ylim=c(40.45, 41),xlim=c(-74.4, -73.6)) + 
+  ggtitle("Zooming in on data points with missing zipcode") +
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        axis.title.y=element_blank())
+
+
+grid.arrange(p1, p2, p3, ncol = 3)
+```
+
+As a next step to our KPI exploration we plot the the latitude and the longitude for all listings on a NY map shown on the left. It is well concentrated with no zipcode outside of NY. Middle graph shows the zoomed version of the same graph helping us to get a better sense of data points. Right most graph shows only those 523 rows where zipcodes are missing. We see a lot of missing data is in/around New York City plotted in the Airbnb data, to avoid dropping off data rows with missing zipcodes we will impute it next using KNN.
+
+## Impute Missing Values
+
+In this step we will deal with missing values for the Zipcode column which has 523 missing values. Since we have latitudes and longitudes in the data, none of which is missing, and latitudes and longitudes are a good measure to approximate zipcode, we can impute missing values of zipcodes using latitudes and longitudes. 
+
+### KNN Imputation
+In order to impute the missing values, we will use KNN imputation method. The k nearest neighbors (KNN) algorithm can be used for imputing missing data by finding the k closest neighbors to the observation with missing data and then imputing them based on the non-missing values in the neighbors. Before imputing the values to our primary data set we will build a K-nearest neighbor model on the non-missing values of zipcode using latitude and longitude. For achieving this we will Split the data into 80% and 20% and call it training and testing data correspondingly.
+
+
+```{r Impute Block , warning=FALSE,message=FALSE, fig.height= 4.5}
+#imputing zip code from latitude and longitude
+# selected the non-missing rows for selecting K for model building
+      non_missing_zip<-raw_bnb[!is.na(raw_bnb$zipcode),c('latitude','longitude','zipcode')] 
+      
+      ##extract training set
+      train <- non_missing_zip%>% 
+        sample_n(size = 0.8 * nrow(non_missing_zip))
+      ##extract testing set
+      test <- setdiff(non_missing_zip ,train)
+      
+      train_category <- train[,"zipcode"]
+      test_category <- test[,"zipcode"]
+      
+      accuracy = vector()
+      accuracy<-c(1:10)
+      #pick how many k to try
+      k = 1:10
+      
+      for (i in k) {
+        #build a model for the i-th k-value
+        knn.pred <- knn(train[,1:2] , test[,1:2] , cl = train_category, k = i)
+        
+        #calculate the accuracy
+        accuracy[i] = mean(knn.pred==test_category)
+      }
+      accuracy <- accuracy*100
+      bestk = which.max(accuracy)
+      bestaccuracy = max(accuracy)
+      
+      #since jump in accuracy is moderate we will decide the value of k which keeps the model complexity low
+      
+      accuracy %>%
+        as.data.frame() %>% 
+        ggplot() +
+        geom_line(aes(x= k, y = accuracy)) +
+        xlab("K Value") + 
+        ylab("Accuracy (%)") +
+        scale_x_continuous(breaks = seq(0,length(k),1) ) + 
+        ggtitle("Test Set Accuracy with Increase in K") + 
+        theme(plot.title = element_text(hjust = 0.5))
+```
+
+It is observed that value of k=`r bestk` gives the best possible predictions with accuracy of as high as `r round(bestaccuracy,2)`%. Due to high accuracy and relatively low number of missing values it is safe to impute zipcode using KNN method. Additionally, we will impute weekly_price and monthly_price based on our assumption that listings with missing weekly and monthly rates do not have discounted weekly and monthly rates and are charge as per the daily rates itself. Output below shows the status of missing values **before**  and **after** imputation.
+
+```{r Impute Block 2, warning=FALSE,message=FALSE}
+      #status before imputing
+      check_na(raw_bnb)      
+
+      #imputing the missing values for zipcode with nearest neighbors using the best value of k
+      zip_data<-raw_bnb[,c('latitude','longitude','zipcode')] 
+      knn_zip_data <- knnImputation(zip_data, k = bestk)
+      raw_bnb$zipcode<-knn_zip_data$zipcode
+
+      #imputing monthly_price and weekly_price
+      raw_bnb$monthly_price<-ifelse(is.na(raw_bnb$monthly_price),raw_bnb$price*30,raw_bnb$monthly_price)
+      raw_bnb$weekly_price<-ifelse(is.na(raw_bnb$weekly_price),raw_bnb$price*7,raw_bnb$weekly_price)
+      check_na(raw_bnb)
+```
+Looking at the results we can deduce that no more imputation is required on the 4 remaining columns as we will not perform any calculations on them.  
+
+**Note:** The `Bedroom` feature  should have ideally been imputed to get a better understanding of the data, but during initial data exploration on `Airbnb data` using `name, summary`, `space, description and neighborhood_overview` columns it was observed that more than 90% of these missing bedroom cases belonged to studio apartments. Hence, no imputation is necessary.
+
+## Data Filtering & Logic Design
+
+### Applying Filters
+After careful examination of imputed data we end our Exploratory Data Analysis with data filtering. Based on the given requirement we trim down our data to only include listings in New York City with exactly 2 bedrooms. This is achieved by filtering **Zillow data** for New York City and then using this filtered data specifically the RegionName from **Zillow data** which represent the zipcodes to filter zipcodes in the **Airbnb data.** After running the code below, we have successfully merged 2 data sources and applied the relevant filters related to `New York city` and `2 bedrooms`.
+
+**Note: ** It is very important that we perform the data filtering after the imputation so that we have sufficient observations for a meaningful guess/approximation.
+
+```{r Filtering Block , warning=FALSE,message=FALSE,results='hide'}
+
+# strictly applying business rules
+#zip handling extra characters
+  raw_Zillow$RegionName<-substr(raw_Zillow$RegionName, 1, 5)
+  raw_bnb$zipcode<-substr(raw_bnb$zipcode, 1, 5)
+
+  NY_median_cost <- raw_Zillow %>%
+  filter(City==city_name,State==state_name)
+      
+  NY_data <- raw_bnb %>%
+  filter(bedrooms==bed_rooms,zipcode %in% NY_median_cost[,'RegionName'])
+  
+# QC_STEP # sum(NY_data$zipcode==10002)
+summary(NY_data)
+```
+
+### Logic - Which Zipcodes will get us the maximum revenue on our investment?
+The simple measure of returns obtained after buying the properties are not the best measures to compare the zipcodes as property’s median prices vary a lot based on zipcode. It would be novice to compare rental revenues between a 2 bedroom apartments in Downtown Cincinnati to a 2 bedroom apartment in Downtown New York aka Lower Manhattan. Therefore, in our analysis, we will be calculating ratios using median returns and median house price in `each zipcode for 1 year`. Time of 1 year is arbitrary and can take any value as ratio of all zips will remain static in time. The following variables will be used to find the best zip to invest into.
+
+### Terminology
+
+* **Occupancy_rate:** One of the key assumption is that the occupancy rate is static for all zipcodes at 75 percent.  
+* **Units_available:** This column defines the number of properties which are present in the given zipcode. A higher value means more number of properties are available in the respective zipcode for analysis.  
+* **Median_cost**: The column stores the median value of any 2 Bedroom apartment present in respective zipcode, this is derived from the latest value from available Zillow data.  
+* **Median_rent_val**: The column stores the median rental value of any 2 Bedroom apartment present in respective zipcode, this is derived from the formula defined below.  
+* **Prob_daily**: This variable denotes the probability of a customer booking a property for single day. We assume it to be 50 percent.  
+* **Prob_weekly**: This variable denotes the probability of a customer booking a property for a week. We assume it to be 30 percent, this is assumed to be lower partially because of missing data.  
+* **Prob_monthly**: This variable denotes the probability of a customer booking a property month. We assume it to be 20 percent, this is assumed to be lower partially because of missing data.  
+* **Revenue_by_Cost_Ratio**: Defines the quality measure of a zipcode given by the ratio of the revenue obtained and amount spend in buying the property. Higher is better.
+
+###  Formula  used
+`For any Zipcode`  
+
+**Median_rent_val - **  
+`Occupancy_rate *365* (median(price)* Prob_daily +  median(weekly_price) * Prob_weekly / 7 + median(monthly_price)* Prob_monthly / 30)`
+
+**Revenue_by_Cost_Ratio - **  
+`Median_rent_val/Median_cost`
+
+The below code generates these variables and gives the Zipcodes of interest 
+
+```{r Logic Block , warning=FALSE,message=FALSE}
+#mapping the median house value to median rent price as they are directly proportional in a given zipcode
+Prob_daily<-0.5
+Prob_weekly<-0.3
+Prob_monthly<-0.2
+Occupancy_rate<-0.75
+
+zip_with_median_rent<-NY_data %>%
+group_by(zipcode) %>%
+#Using Assumption of 75% occupancy ()
+summarize(Median_rent_val = Occupancy_rate * 365* (median(price)* Prob_daily +  median(weekly_price) * Prob_weekly / 7 + median(monthly_price)* Prob_monthly / 30))
+
+#Finding ratios between median cost and median revenue value
+
+zip_lvl_ratio<-zip_with_median_rent %>%
+  inner_join(NY_median_cost,by=c('zipcode' = 'RegionName'))%>%
+  select(tail(names(.), 1),Median_rent_val,zipcode)%>%
+  mutate(Revenue_by_Cost_Ratio=Median_rent_val/.[[1]])%>%
+  mutate(rnk=dense_rank(desc(Revenue_by_Cost_Ratio)))%>%
+  select(zipcode,Revenue_by_Cost_Ratio,rnk) %>% # higher ratio is better
+  arrange(desc(Revenue_by_Cost_Ratio))
+
+## additional analysis to caution if a zip with very less data is among top contenders
+    
+    line_level_data<-NY_data%>%
+    inner_join(zip_lvl_ratio,by='zipcode')%>%
+    group_by(zipcode) %>% 
+    mutate(Units_available=n()) %>%
+    filter(Units_available>5) %>%
+    mutate(count_less_10=ifelse(Units_available<=10,1,0))
+    
+    zip_lvl_ratio_2bhk<-line_level_data %>%
+    filter(!is.na(Units_available))%>%
+    select(zipcode,Revenue_by_Cost_Ratio,Units_available,count_less_10)%>%
+    unique()
+
+  line_level_data<-as.data.frame(line_level_data)
+  line_level_data$rnk<-dense_rank(line_level_data$rnk)
+
+```
+## Executive Summary
+### Report Summary
+The objective of the study was to identify top zipcodes for real estate investment company that wants to buy properties in New York city and put them on rent to have high short term gains. Airbnb property listing data and Zillow property cost data were available for analysis. In the initial step, the data was pre-processed, cleaned to remove unnecessary symbols, outliers and exploratory data analysis was carried out using interactive graphs and visuals to find any underlying trends about neighborhood & missing values. Following which imputation of missing values was performed to complete the dataset for all necessary KPIs. Finally two datasets were merged together on zipcode to get a single data table containing information regarding the cost of property and various features pertaining to rent of the properties in each zipcode. Before moving forward with final analysis, data was filtered to get relevant data for New York City and 2 bedroom listings aggregated at the zipcode level. In the final step, we define the logic that zipcodes with 2 bedroom properies with higher rent and low median house cost are the best for investment. For this we calculated a ratio between price (rent) and house cost (zipcode median) to figure out which zipcodes are high rewarding (higher ratio is better).
+	
+It was finally concluded that investment worthy zipcodes should not only have high return on investment but should also have substantial number of properties to choose from or monopolize the area. **From graphs, it was inferred that zipcodes 11692, 11693, 11207, 10017 and 11210 are the top 5 zipcodes that should be considered for investment as they have higher return on investment and have sufficient number of properties to choose from.** 
+
+### Top 15 zipcodes with count_less_10 Indicator & Rent Price Range
+```{r summary, message=FALSE,warning=FALSE,fig.height = 5}
+zip_lvl_ratio_2bhk_2<-as.data.frame(zip_lvl_ratio_2bhk)%>%
+  #filter(count_less_10==0) %>%
+  top_n(n=15, wt=Revenue_by_Cost_Ratio) #Top 20 zips
+
+  line_level_data %>%
+  filter(zipcode %in% zip_lvl_ratio_2bhk_2$zipcode) %>%
+  ggplot(aes(x=as.factor(rnk), y=price, fill=as.factor(neighbourhood_group_cleansed),label=zipcode)) + 
+  geom_boxplot() + coord_cartesian(xlim=c(-1,15 )) +
+  scale_fill_brewer(palette = "Dark2") + 
+  ylab("Price Per Night") +  
+  geom_text(aes(x=as.factor(rnk), y=-15, label= count_less_10)) + 
+  geom_text(aes(x=0, y=-15, label ="count_less_10")) + 
+  geom_text(aes(x=as.factor(rnk), y=25, label= zipcode )) + 
+  geom_text(aes(x=0, y=25, label ="Zipcode")) + 
+  scale_fill_discrete(name = "Neighborhood") + 
+  xlab("Overall Rank") +
+  theme(legend.position="top")
+```
+
+Count_less_10 indicator is 1 for zipcodes with less than 10 listings in the Airbnb data. We have 7 out of 15 top zipcodes with  Count_less_10 as 1. Since we have low number of listings in these 7 zipcodes we should avoid investing in these unless we have more information on them from alternative sources. Zipcodes belonging to Queens Region (highlighted in purple) is the best neighbourhood to invest in as it gives the best return on investment with 8 out of top 15 zipcodes followed by Bronx, but all listings for Bronx have less than 10 units available (Count_less_10 as 1). Furthermore, we can see only 1 listing from Manhattan region which has considerably high rent when compared to other top 15 zipcodes and yet is rankeded only 6th best for investments, this is due to high initial investment required for Manhattan 2 bedroom apartments.
+
+### Top 5 Zipcodes With Atleast 10 Listings In Airbnb Data
+```{r summary 2, message=FALSE,warning=FALSE,fig.height = 5}
+
+  zip_lvl_ratio_2bhk_2<-as.data.frame(zip_lvl_ratio_2bhk)%>%
+    filter(count_less_10==0) %>%
+    top_n(n=5, wt=Revenue_by_Cost_Ratio) %>% #Top 5 large zips
+    arrange(desc(Revenue_by_Cost_Ratio))
+  
+  ylab <- seq(.25, 2, .25)
+  
+  p1<-raw_Zillow_complete %>%
+    filter(RegionName %in% zip_lvl_ratio_2bhk_2$zipcode) %>%
+    rename(Zipcode=RegionName)%>%
+    select(Zipcode,`2008-01`:tail(names(.), 1)) %>%
+    gather( key = "Year_month", value = "median_value", -Zipcode) %>%
+    ggplot(aes(x=Year_month, y=median_value, colour =Zipcode)) + guides(colour=FALSE) +
+    geom_point() + stat_smooth(method = 'lm', se = FALSE) + 
+    scale_y_continuous(labels = paste0(ylab, "M"), breaks = 1000000 * ylab) +
+    geom_text(aes(x='2008-11', y=-5, label ="2008")) + 
+    geom_text(aes(x='2019-01', y=-5, label ="2019")) +
+    theme(legend.position="top") +
+    theme(axis.text.x=element_blank(),
+          axis.ticks.x=element_blank()) +
+          xlab("Year") +
+          ylab("Median House Price") + scale_color_brewer(palette = "Set2") + 
+    ggtitle("Median House Price Trends")
+    
+  
+  p2<-zip_lvl_ratio_2bhk_2 %>%
+    ggplot(aes(x=c(1,2,3,4,5), y=100*(15*Revenue_by_Cost_Ratio-1),fill=zipcode)) +
+    geom_bar(stat = "identity", width = 0.5) + scale_fill_brewer(palette = "Set2") +
+    xlab("Rank") + ylab("Percentage Return on investment") + ggtitle("15 Year Projection")
+  
+  
+  
+  grid.arrange(p1,  p2,  ncol = 2)
+    
+```
+
+Since we concluded earlier that any zipcode with less than 10 listing requires more scrutiny before investing, therefore our final recommendation will be from only those zipcodes with atleast 10 listings. 
+It is evident that Zipcode `10017` belonging to Manhattan region does not follow the usual trend, it gives good return on investment (ranked 3rd) despite the higher median house price in that region due to high rent price.  All top 5 zipcodes will start yielding profits within 15 years with top 2 zipcodes as early as 10 years. Within 15 years top 2 zipcodes would have already gained 83% and 71% respectively.
+
+## Annexure
+Additional steps that could be perform to make better decisions for the real estate company.  
+
+### Business Decisions  
+
+* `Time series Forecasting-` Since we have median house prices for every month starting 2008. We could use time series techniques to predict the future median house prices and invest accordingly to get better returns on our investments.  
+* `SQL queries-` Since dataset required constant grouping and ungrouping of data on zipcode, we could have leveraged SQL queries for easier manipulations.  
+* `Customer Segmentation-` Before we enter any new market it is crucial to understand the customer choice patters and consumer behavior. Hence we should segmenting the customer on the basis of type of tourist, spending power, age and then perform analysis.  
+* `Competitor Analysis-` Since we are going to make an investment which is enormous in size, it is advisable to analyze the competitor strategy. If competitors have deep pockets they would react aggressively in their pricing strategies when they see a new competition in the market. Based on this, the real estate company would have to make additional investments for marketing or move towards long term plan.
+* `Customer Reviews-` Airbnb business is largely dependent on past customer reviews, they are crucial for new bookings as well as the pricing of each listing.
+* `Calculating Occupancy rate-` Occupancy rate was assumed to be 75% and that was further broken down into daily, weekly and monthly occupancy, however, real occupancy rate could be a lot different for each listing and depends on features like house rules, superhost, host response rate, host acceptance rate, neighbourhood, property type, room type, bed type, amenities, price, cleaning fee, guest allowed, minimum and maximum nights, availability, booking policy, cancellation policy and reviews.
+
+### Additional Data Sources
+
+* `Crime Data-` Safe neighborhood is one of the important factors for travelers and they would prefer renting property with low crime rate. We could incorporating openly available crime data to study its relationship with rent pricing.  
+* `Social Media Data-` The real estate company can gather data from social media platforms and perform sentiment analysis on the data to identify the neighborhood popularity to make a better decision.  
+* `Public Transport Data-` If a zipcode doesn’t have proper public transport channels nearby, then there are high chances that tourists will avoid such zipcodes. So analysis of this data needs to be performed.
+
+### Bibliography
+Stack Overflow - For R Markdown formatting and ggplot related queries.
